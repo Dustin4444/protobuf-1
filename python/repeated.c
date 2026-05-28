@@ -195,57 +195,91 @@ PyObject* PyUpb_RepeatedContainer_DeepCopy(PyObject* _self, PyObject* value) {
   return (PyObject*)clone;
 }
 
+// Extend the repeated field with the data in the given iterator.
+//
+// Args:
+//   _self: The repeated container to extend.
+//   iterator: The iterator to extend from.
+//
+// Returns:
+//   NULL on failure, Py_RETURN_NONE otherwise.
+static PyObject* PyUpb_RepeatedContainer_ExtendSubMessageFromIterator(
+    PyObject* _self, PyObject* iterator) {
+  PyObject* e;
+  while ((e = PyIter_Next(iterator))) {
+    PyObject* ret = PyUpb_RepeatedCompositeContainer_Append(_self, e);
+    Py_DECREF(e);
+    if (ret == NULL) {
+      return NULL;
+    }
+    Py_DECREF(ret);
+  }
+  if (PyErr_Occurred()) {
+    return NULL;
+  }
+  Py_RETURN_NONE;
+}
+
+// Extend the repeated field with the data in the given iterator.
+//
+// Args:
+//   field: The field descriptor of the repeated field.
+//   arr: The underlying upb_Array to extend.
+//   arena: The arena to use for allocation.
+//   iterator: The iterator to extend from.
+//
+// Returns:
+//   NULL on failure, Py_RETURN_NONE otherwise.
+static PyObject* PyUpb_RepeatedContainer_ExtendScalarFromIterator(
+    const upb_FieldDef* field, upb_Array* arr, upb_Arena* arena,
+    PyObject* iterator) {
+  PyObject* e;
+  while ((e = PyIter_Next(iterator))) {
+    upb_MessageValue msgval;
+    if (!PyUpb_PyToUpb(e, field, &msgval, arena)) {
+      assert(PyErr_Occurred());
+      Py_DECREF(e);
+      return NULL;
+    }
+    upb_Array_Append(arr, msgval, arena);
+    Py_DECREF(e);
+  }
+  if (PyErr_Occurred()) {
+    return NULL;
+  }
+  Py_RETURN_NONE;
+}
+
 PyObject* PyUpb_RepeatedContainer_Extend(PyObject* _self, PyObject* value) {
   PyUpb_RepeatedContainer* self = (PyUpb_RepeatedContainer*)_self;
   upb_Array* arr = PyUpb_RepeatedContainer_AssureWritable(_self);
   if (!arr) return NULL;
-  size_t start_size = upb_Array_Size(arr);
+
+  upb_Arena* arena = PyUpb_Arena_Get(self->arena);
+  const upb_FieldDef* f = PyUpb_RepeatedContainer_GetField(self);
+  const size_t start_size = upb_Array_Size(arr);
+  Py_ssize_t size_hint = PyObject_LengthHint(value, 0);
+  if (size_hint > 0) {
+    upb_Array_Reserve(arr, start_size + size_hint, arena);
+  }
+
   PyObject* it = PyObject_GetIter(value);
   if (!it) {
     PyErr_SetString(PyExc_TypeError, "Value must be iterable");
     return NULL;
   }
 
-  const upb_FieldDef* f = PyUpb_RepeatedContainer_GetField(self);
-  bool submsg = upb_FieldDef_IsSubMessage(f);
-  PyObject* e;
-
-  if (submsg) {
-    while ((e = PyIter_Next(it))) {
-      PyObject* ret = PyUpb_RepeatedCompositeContainer_Append(_self, e);
-      Py_XDECREF(ret);
-      Py_DECREF(e);
-    }
+  PyObject* ret = NULL;
+  if (upb_FieldDef_IsSubMessage(f)) {
+    ret = PyUpb_RepeatedContainer_ExtendSubMessageFromIterator(_self, it);
   } else {
-    upb_Arena* arena = PyUpb_Arena_Get(self->arena);
-    Py_ssize_t size = PyObject_Size(value);
-    if (size < 0) {
-      // Some iterables may not have len. Size() will return -1 and
-      // set an error in such cases.
-      PyErr_Clear();
-    } else {
-      upb_Array_Reserve(arr, start_size + size, arena);
-    }
-    while ((e = PyIter_Next(it))) {
-      upb_MessageValue msgval;
-      if (!PyUpb_PyToUpb(e, f, &msgval, arena)) {
-        assert(PyErr_Occurred());
-        Py_DECREF(e);
-        break;
-      }
-      upb_Array_Append(arr, msgval, arena);
-      Py_DECREF(e);
-    }
+    ret = PyUpb_RepeatedContainer_ExtendScalarFromIterator(f, arr, arena, it);
   }
-
   Py_DECREF(it);
-
-  if (PyErr_Occurred()) {
+  if (ret == NULL) {
     upb_Array_Resize(arr, start_size, NULL);
-    return NULL;
   }
-
-  Py_RETURN_NONE;
+  return ret;
 }
 
 static PyObject* PyUpb_RepeatedContainer_Item(PyObject* _self,
