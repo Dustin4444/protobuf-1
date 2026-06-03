@@ -412,6 +412,59 @@ class DescriptorTest(unittest.TestCase):
     # Modification is (unfortunately) reflected in the descriptor.
     self.assertTrue(self.my_message.GetOptions().deprecated)
 
+  def testImmutableMapLookup(self):
+    complex_opt1 = unittest_custom_options_pb2.complex_opt1
+    msg_proto = descriptor_pb2.DescriptorProto()
+    msg_proto.name = 'TestMessage_%d' % id(self)
+    # Set a map value in the options.
+    # ComplexOptionType1 has a field 'my_map' of type map<string, int32>.
+    opt = msg_proto.options.Extensions[complex_opt1]
+    opt.my_map['key'] = 123
+    opt.my_map['other_key'] = 456
+
+    desc = descriptor.MakeDescriptor(msg_proto)
+    options = desc.GetOptions()
+    immutable_map = options.Extensions[complex_opt1].my_map
+
+    # Test lookups.
+    self.assertEqual(immutable_map['key'], 123)
+    self.assertEqual(immutable_map['other_key'], 456)
+    self.assertIn('key', immutable_map)
+    self.assertIn('other_key', immutable_map)
+    self.assertNotIn('nonexistent_key', immutable_map)
+    self.assertEqual(len(immutable_map), 2)
+
+    # Test lookups via bytes.
+    self.assertEqual(immutable_map[b'key'], 123)
+    self.assertEqual(immutable_map[b'other_key'], 456)
+    self.assertIn(b'key', immutable_map)
+    self.assertIn(b'other_key', immutable_map)
+    self.assertNotIn(b'nonexistent_key', immutable_map)
+    self.assertEqual(len(immutable_map), 2)
+
+    # Test iteration.
+    self.assertEqual(set(immutable_map.keys()), {'key', 'other_key'})
+    self.assertEqual(set(immutable_map.values()), {123, 456})
+    self.assertEqual(
+        set(immutable_map.items()), {('key', 123), ('other_key', 456)}
+    )
+
+    # Test get().
+    self.assertEqual(immutable_map.get('key'), 123)
+    self.assertEqual(immutable_map.get('nonexistent_key'), None)
+    self.assertEqual(immutable_map.get('nonexistent_key', 999), 999)
+
+    # Test get() with bytes.
+    self.assertEqual(immutable_map.get(b'key'), 123)
+    self.assertEqual(immutable_map.get(b'nonexistent_key'), None)
+    self.assertEqual(immutable_map.get(b'nonexistent_key', 999), 999)
+
+    # Test immutability
+    if api_implementation.Type() != 'cpp':
+      immutability_error = TypeError
+      with self.assertRaises(immutability_error):
+        immutable_map['new_key'] = 789
+
   def testSimpleCustomOptions(self):
     file_descriptor = unittest_custom_options_pb2.DESCRIPTOR
     message_descriptor = (
